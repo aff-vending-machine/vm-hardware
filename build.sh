@@ -1,2 +1,9 @@
-docker build --platform linux/arm64 -t ztrixack/vmc_rpi-hw:0.3.0-arm64 .
-docker push ztrixack/vmc_rpi-hw:0.2.0-arm64
+
+# build amd64
+docker build --platform linux/amd64 -f dockerfile -t vm-hardware:0.0.0 .
+
+#build arm64
+docker build --platform linux/arm64 -f dockerfile -t vm-hardware:0.0.0-arm64 .
+
+# test
+docker run -it vm-hardware:0.0.0
