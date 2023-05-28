@@ -1,12 +1,11 @@
 # from winreg import REG_RESOURCE_REQUIREMENTS_LIST
 
-## This version for Jett Vending Machine ##
+#This file for HardWare with Lift model : ZHB_X_V3.2 2017.07.18 FW: XZZE0_200908
 
 import os
 import serial
 import redis
 import time
-from datetime import datetime 
 import logging
 from binascii import unhexlify, hexlify
 
@@ -66,16 +65,14 @@ order = ''
 
 def write_file(data, mode):
     f = open("logging_transceive.txt", "a")
-    now = datetime.now()
-    dt_string = now.strftime("%d/%m/%Y %H:%M:%S")
-    f.write(dt_string)
+    f.write(time.time())
     if (mode):
-        f.write(" receive : ")
+        f.write("receive : ")
     else :
-        f.write(" send : ")
+        f.write("send : ")
     f.write(data)
     f.write('\n')
-    f.close()
+    f.close() 
 
 def data_receiver(ser, cmd_data, cmd_len):
     data_results = []
@@ -138,7 +135,7 @@ def data_receiver(ser, cmd_data, cmd_len):
 
         time.sleep(0.01)
     logging.critical("!!!!!!!!!--Data in data_results: %r", data_results)
-    write_file(repr(data_results),1)
+    write_file(data_results, 1)
     return data_results
 
 
@@ -171,15 +168,10 @@ def maintain(ser, cmd_data, cmd_len, stage_machine):
                         logging.critical("Dual Machine: %r", data_machine)
                     data_temperature = int(msg_in[32:34], 16)
                     logging.critical("Temperature: %r", data_temperature)
-                    put_temp(data_temperature)
                     stage_machine = 1
-
 
                 elif msg_in[:2] == '7D':
                     counter_76 = 0
-                    logging.critical("Door Status : %r", msg_in[8:10])
-                    if msg_in[8:10] != '00':
-                        stage_machine = 10 
 
     return stage_machine
 
@@ -207,10 +199,6 @@ def pre_sale(ser, cmd_data, cmd_len, stage_machine):
                     stage_machine = 3
                 elif msg_in == '760076':
                     stage_machine = 2
-                elif msg_in[:2] == '7D':
-                    logging.critical("Door Status : %r", msg_in[8:10])
-                    if msg_in[8:10] != '00':
-                        stage_machine = 10
                 else:
                     stage_machine = 2
 
@@ -230,23 +218,105 @@ def after_sale(ser, cmd_data, cmd_len, stage_machine):
                     logging.critical("--------------Data Push: %r", data_push)
                     ##### Push 7C007C - Open the door ####
                     ser.write(unhexlify(data_push))
-                    
-                    logging.critical(" message 7C [12:14] = %r", msg_in[12:14])
-                    if msg_in[12:14] == '00':   ## droped (normal )
-                        stage_machine = 6
-                    else:                       ## not drop 
-                        stage_machine = 7
 
-                elif msg_in[:2] == '7D':
-                    logging.critical("Door Status : %r", msg_in[8:10])
-                    if msg_in[8:10] != '00':
-                        stage_machine = 10
+                    deliver_counter = time.time()
+                    stage_machine = 5
+                # elif:
+                #     pass
     else:
         stage_machine = 3
 
+    # stage_machine == 5 - Lift Delivered, Open the door ##
+    lift_list = ['8BEFEEFE00000066', '8BEFEEFE00000167']
+    """
+    8BEFEEFE00000066 - Lift Available
+    8BEFEEFE00000167 - Lift Sensor Detected
+    """
+    wait_remove_goods = 0
+    deliver_left = 0
+    while stage_machine == 5 and deliver_left < 180:
+        data_results = data_receiver(ser, cmd_data, cmd_len)
+        deliver_left = time.time()-deliver_counter
+        for msg_in in data_results:
+            logging.critical(
+                "--------------Waiting Remove Goods Time: %r | Data: %r" % (deliver_left, data_results))
+            if msg_in in lift_list:
+                if msg_in == '8BEFEEFE00000066':
+                    if deliver_left < 2:
+                        logging.critical(
+                            "-!!!!!!!!!!!!!!!!!!!!!!!-Slot Error-!!!!!!!!!!!!!!!!!!!!!!!!!-")
+                        stage_machine = 7
+                    elif deliver_left <= 101:
+                        logging.critical(
+                            "-!!!!!!!!!!!!!!!!!!!!!!!-Goods Delivered-!!!!!!!!!!!!!!!!!!!!!!!!!-")
+                        # wait_remove_goods = 0
+                        stage_machine = 6
+                    elif deliver_left > 100:
+                        logging.critical(
+                            "-!!!!!!!!!!!!!!!!!!!!!!!-Deliver Timeout-!!!!!!!!!!!!!!!!!!!!!!!!!-")
+                        stage_machine = 7
+                elif msg_in == '8BEFEEFE00000167' and deliver_left < 180:
+                    # wait_remove_goods += 1
+                    stage_machine = 8
+
+            elif msg_in[:2] == '7C' or msg_in[:2] == '79' or msg_in[:2] == '85':
+                data_push = msg_in[:2] + '00' + msg_in[:2]
+                logging.critical("--------------Data Push: %r", data_push)
+                ser.write(unhexlify(data_push))
+                # time.sleep(20)
+            # elif wait_remove_goods > 0 and msg_in[:2] == '76':
+            #     if wait_remove_goods < 3:
+            #         data_push = '761600018D'
+            #         logging.critical("--------------Data Push: %r", data_push)
+            #         ser.write(unhexlify(data_push))
+            #         logging.critical("--------------Trying Remove Goods: %r", wait_remove_goods)
+            #         stage_machine = 5
+            #     else:
+            #         logging.critical("-!!!!!!!!!!!!!!!!!!!!!!!-Goods Stuck-!!!!!!!!!!!!!!!!!!!!!!!!!-")
+            #         stage_machine = 22
+            else:
+                logging.critical(
+                    "-!!!!!!!!!!!!!!!!!!!!!!!-Unknow Slot Command-!!!!!!!!!!!!!!!!!!!!!!!!!-")
+                logging.critical("MSG msg_recv: %r", msg_in)
+                if msg_in in lift_list:
+                    if msg_in == '8BEFEEFE00000066':
+                        stage_machine = 7
+                    elif msg_in == '8BEFEEFE00000167':
+                        stage_machine = 8
+                else:
+                    stage_machine = 10
+                # stage_machine = 20
+
+    # while stage_machine == 7:
+    #     cmd_sta, cmd = get_command()
+    #     data_results = data_receiver(ser, cmd_data, cmd_len)
+
+    #     for msg_in in data_results:
+    #         logging.critical("Stage_MC : %r :: MSG msg_recv: %r", stage_machine, msg_in)
+    #         if msg_in[:2] == '7C' or msg_in[:2] == '79' or msg_in[:2] == '85' or msg_in[:2] == '7D' or msg_in[:2] == '7A':
+    #             data_push = msg_in[:2] + '00' + msg_in[:2]
+    #             # logging.critical("--------------Data Push: %r", data_push)
+    #             ser.write(unhexlify(data_push))
+    #         elif msg_in == '76EFEEFE0000000000000000000000000000000000000051':
+    #             if cmd_sta == True and cmd == 'OPEN_GATE':
+    #                 data_push = '761600018D'
+
+    #             else:
+    #                 data_push = msg_in[:2] + '00' + msg_in[:2]
+    #             logging.critical("--------------Data Push: %r", data_push)
+    #             ser.write(unhexlify(data_push))
+
+    # while stage_machine == 8:
+    #     data_results = data_receiver(ser, cmd_data, cmd_len)
+    #     for msg_in in data_results:
+    #         logging.critical("Stage_MC : %r :: MSG msg_recv: %r", stage_machine, msg_in)
+    #         if msg_in[:2] == '76':
+    #             if msg_in == '76EFEEFE0000000000000000000000000000000000000051':
+    #                 data_push = '760b0200000000000083'
+    #                 logging.critical("--------------Data Push: %r", data_push)
+    #                 ser.write(unhexlify(data_push))
+    #                 stage_machine = 21
     return stage_machine
-
-
 
 
 def open_gate(ser, cmd_data, cmd_len, stage_machine):
@@ -295,7 +365,7 @@ def open_gate(ser, cmd_data, cmd_len, stage_machine):
 
 
 def wait_reset_cmd(ser, cmd_data, cmd_len, stage_machine):
-    while stage_machine == 7 :
+    while stage_machine == 7 or stage_machine == 10:
         cmd_sta, cmd = get_command()
         if cmd_sta == True and cmd == 'RESET':
             stage_machine = 11
@@ -304,27 +374,9 @@ def wait_reset_cmd(ser, cmd_data, cmd_len, stage_machine):
             for msg_in in data_results:
                 data_push = msg_in[:2] + '00' + msg_in[:2]
                 ser.write(unhexlify(data_push))
-                if msg_in[:2] == '7D':
-                    logging.critical("Door Status : %r", msg_in[8:10])
-                    if msg_in[8:10] != '00':
-                        stage_machine = 10
 
     return stage_machine
 
-def wait_door_close(ser, cmd_data, cmd_len, stage_machine):
-    while stage_machine == 10:
-        data_results = data_receiver(ser, cmd_data, cmd_len)
-        for msg_in in data_results:
-            data_push = msg_in[:2] + '00' + msg_in[:2]
-            ser.write(unhexlify(data_push))
-            #logging.critical("stage_mc : %r", stage_machine)
-            if msg_in[:2] == '7D':
-                logging.critical("Door Status : %r", msg_in[8:10])
-                if msg_in[8:10] == '00':
-                    put_event('00000000000', 'G0')
-                    stage_machine = 11
-
-    return stage_machine
 
 def slot_controller(slot_no):
 
@@ -351,14 +403,7 @@ def slot_controller(slot_no):
 ################################
 ##### Redis function       #####
 ################################
-def put_temp(temp):
-    try:
-        r.rpop('TEMP')
-        item = r.lpush('TEMP', temp)
-        return True
-    except Exception as e:
-        logging.critical("redis error")
-        return False
+
 
 def get_queue():
     try:
@@ -402,16 +447,6 @@ def put_response(order, status):
         logging.critical("redis error")
         return False
 
-def put_event(order, status):
-    try:
-        # status = 'G0', 'F1'  :: ('G0' : door close) , ('G1' : door open) 
-        return_val = order[0:9] + status
-        item = r.lpush('EVENT', return_val)
-        return True
-    except Exception as e:
-        logging.critical("redis error")
-        return False
-
 
 while 1:
     stage_machine = maintain(ser, cmd_data, cmd_len, stage_machine)
@@ -435,9 +470,24 @@ while 1:
         stage_machine = 4
 
         stage_machine = after_sale(ser, cmd_data, cmd_len, stage_machine)
-        logging.critical("After Sale stage: %r ------->>", stage_machine)
 
+        # data_results = data_receiver(ser, cmd_data, cmd_len)
+        # for msg_in in data_results:
+        #     logging.critical("MSGGGGGGGGG_Innnnnn: %r", msg_in)
+        #     if len(msg_in) > 6:
+        #         data_push = msg_in[:2] + '00' + msg_in[:2]
+        #         logging.critical("--------------Data Push: %r", data_push)
+        #         ser.write(unhexlify(data_push))
+        #         stage_machine = 7
 
+        # data_results = data_receiver(ser, cmd_data, cmd_len)
+        # for msg_in in data_results:
+        #     logging.critical("MSGGGGGGGGG_Innnnnn: %r", msg_in)
+        #     if len(msg_in) > 6:
+        #         data_push = msg_in[:2] + '00' + msg_in[:2]
+        #         logging.critical("--------------Data Push: %r", data_push)
+        #         ser.write(unhexlify(data_push))
+        #         stage_machine = 8
     if stage_machine == 6:
         logging.critical("<<------ Delivered ------->>")
         put_response(order, 'S0')
@@ -447,13 +497,16 @@ while 1:
         put_response(order, 'E0')
         stage_machine = wait_reset_cmd(ser, cmd_data, cmd_len, stage_machine)
 
+    if stage_machine == 8:
+        logging.critical("<<------ product stuck ------->>")
+        put_response(order, 'E1')
+        stage_machine = open_gate(ser, cmd_data, cmd_len, stage_machine)
 
     if stage_machine == 10:
         logging.critical(
-            "<<----------- Door open --------->>")
-        put_event(order, 'G1')
-        stage_machine = wait_door_close(ser, cmd_data, cmd_len, stage_machine)
-
+            "<<-------- Unknow Response from after sale process ------->>")
+        put_response(order, 'E2')
+        stage_machine = wait_reset_cmd(ser, cmd_data, cmd_len, stage_machine)
 
     if stage_machine == 11:
         logging.critical("<<---------- Reset Stage --------->>")
