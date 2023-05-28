@@ -295,7 +295,7 @@ def open_gate(ser, cmd_data, cmd_len, stage_machine):
 
 
 def wait_reset_cmd(ser, cmd_data, cmd_len, stage_machine):
-    while stage_machine == 7 :
+    while stage_machine == 7 or stage_machine == 10:
         cmd_sta, cmd = get_command()
         if cmd_sta == True and cmd == 'RESET':
             stage_machine = 11
@@ -304,10 +304,6 @@ def wait_reset_cmd(ser, cmd_data, cmd_len, stage_machine):
             for msg_in in data_results:
                 data_push = msg_in[:2] + '00' + msg_in[:2]
                 ser.write(unhexlify(data_push))
-                if msg_in[:2] == '7D':
-                    logging.critical("Door Status : %r", msg_in[8:10])
-                    if msg_in[8:10] != '00':
-                        stage_machine = 10
 
     return stage_machine
 
